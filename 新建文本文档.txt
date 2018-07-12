@@ -1,0 +1,171 @@
+// 基于高效融合的去雾
+// 第一步：输入带雾的图像
+// 第二步：基于高斯暗通道的大气光线估计
+// 第三步：基于CLAHE的精细细节描述
+// 第四步：基于融合的转换估计
+// 第五步：输出恢复的图像
+
+#include "stdafx.h"
+#include <Windows.h>                
+#include<iostream>
+#include<time.h>
+
+// opencv
+#include <opencv/cv.h>
+#include <opencv2\highgui\highgui.hpp>
+
+using namespace std;
+using namespace cv;
+
+// _CRT_SECURE_NO_WARNINGS 
+// use _CRT_SECURE_NO_WARNINGS.See online help for details.
+
+using namespace std;
+// using namespace cv;
+
+
+unsigned char* pBmpBuf;
+int bmpWidth;
+int bmpHeight;
+RGBQUAD* pColorTable;
+int biBitCount;
+
+
+
+
+unsigned char* readBmp(char* bmpName)
+
+{
+	FILE* fp = fopen(bmpName, "rb"); //以二进制读的方式打开指定的图像文件
+	if (fp == 0) return 0;
+
+	fseek(fp, sizeof(BITMAPFILEHEADER), 0);
+	BITMAPINFOHEADER infoHead;
+	fread(&infoHead, sizeof(BITMAPINFOHEADER), 1, fp);
+
+	bmpWidth = infoHead.biWidth;
+	bmpHeight = infoHead.biHeight;
+	biBitCount = infoHead.biBitCount;
+
+	//strick
+	int lineByte = (bmpWidth * biBitCount / 8 + 3) / 4 * 4;
+
+
+	if (biBitCount == 8)
+	{
+		pColorTable = new RGBQUAD[256];
+		fread(pColorTable, sizeof(RGBQUAD), 256, fp);
+
+	}
+	pBmpBuf = new unsigned char[lineByte * bmpHeight];
+
+	fread(pBmpBuf, 1, lineByte * bmpHeight, fp);
+	fclose(fp);
+	return pBmpBuf;
+}
+
+
+
+BYTE *RmwRead8BitBmpFile2Img(const char * filename, int *width, int *height)
+{
+	FILE *binFile;
+	BYTE *pImg = NULL;
+	BITMAPFILEHEADER fileHeader;
+	BITMAPINFOHEADER bmpHeader;
+	BOOL isRead = TRUE;
+	int linenum, ex;
+
+	if ((binFile = fopen(filename, "rb")) == NULL) return NULL;
+
+	if (fread((void *)&fileHeader, 1, sizeof(fileHeader), binFile) != sizeof(fileHeader)) isRead = FALSE;
+	if (fread((void *)&bmpHeader, 1, sizeof(bmpHeader), binFile) != sizeof(bmpHeader)) isRead = FALSE;
+
+	if (isRead == FALSE || fileHeader.bfOffBits<sizeof(fileHeader) + sizeof(bmpHeader)) {
+		fclose(binFile);
+		return NULL;
+	}
+
+	*width = bmpHeader.biWidth;
+	*height = bmpHeader.biHeight;
+	linenum = (*width * 1 + 3) / 4 * 4;
+	ex = linenum - *width * 1;
+
+	fseek(binFile, fileHeader.bfOffBits, SEEK_SET);
+	pImg = new BYTE[(*width)*(*height)];
+	if (pImg != NULL) {
+		for (int i = 0; i<*height; i++) {
+			int r = fread(pImg + (*height - i - 1)*(*width), sizeof(BYTE), *width, binFile);
+			if (r != *width) {
+				delete pImg;
+				fclose(binFile);
+				return NULL;
+			}
+			fseek(binFile, ex, SEEK_CUR);
+		}
+	}
+	fclose(binFile);
+	return pImg;
+}
+
+int main()
+{
+	typedef int(__stdcall *Dehaze)(unsigned char *Src, unsigned char *Dest, int Width, int Height, int Stride,
+		int BlockSize, int GuideRadius, int MaxAtom, float Omega, float T0, float Gamma);
+
+	Dehaze pfFuncInDll = NULL;
+	HINSTANCE hinst = LoadLibraryA("ImageMaster.dll");
+
+	unsigned char* C; // input image
+	//unsigned char* C = readBmp("test.png");
+	//unsigned char* C = readBmp("forest.jpg");
+
+	Mat inputImagemat = imread("forest.jpg", CV_LOAD_IMAGE_UNCHANGED);
+	IplImage inputImageiplimage = inputImagemat;
+	//IplImage  -- >  unsigned char*
+	C = (unsigned char*)inputImageiplimage.imageData;
+
+	//创建一个名字为MyWindow的窗口
+	//namedWindow("带雾图像", CV_WINDOW_AUTOSIZE);
+
+	// 图片的显示
+	//imshow("带雾图像", inputImagemat);
+	//waitKey(0);
+
+	if (hinst != NULL)
+	{
+		cout << "ImageMaster.dll load SUCCESS !!!" << endl;
+		pfFuncInDll = (Dehaze)GetProcAddress(hinst, "IM_HazeRemovalBasedOnDarkChannelPrior");
+
+		//unsigned char A[1024 * 768 * 3];
+		//unsigned char B[1024 * 768 * 3];
+		unsigned char* A = (unsigned char *)malloc(sizeof(unsigned char) * (1024 * 768 * 3));
+		unsigned char* B = (unsigned char *)malloc(sizeof(unsigned char) * (1024 * 768 * 3));
+		unsigned char* D = (unsigned char *)malloc(sizeof(unsigned char) * (1023 * 763 * 4));
+
+
+		//cv::Mat inputImagemat;
+
+		if (pfFuncInDll != NULL)
+		{
+			cout << "IM_HazeRemovalBasedOnDarkChannelPrior function load SUCCESS !!!" << endl;
+			clock_t start = clock();
+			//int c = pfFuncInDll(A, B, 1024, 768, 3072, 4, 5, 220, 0.9F, 0.01F, 0.9F);
+			int d = pfFuncInDll(C, D, 1023, 763, 4092, 4, 5, 220, 0.9F, 0.01F, 0.9F);
+			clock_t ends = clock();
+
+			cout << "Running Time : " << (double)(ends - start) << "ms" << endl;
+			cout << (int)C[100] << "\t" << (int)C[101] << "\t" << (int)C[102] << "\t" << endl;
+			cout << (int)D[100] << "\t" << (int)D[101] << "\t" << (int)D[102] << "\t" << endl;
+			cout << (int)C[1000] << "\t" << (int)C[1001] << "\t" << (int)C[1002] << "\t" << endl;
+			cout << (int)D[1000] << "\t" << (int)D[1001] << "\t" << (int)D[1002] << "\t" << endl;
+			cout << d << endl;
+		}
+
+		FreeLibrary(hinst);
+	}
+	system("pause");
+	return 0;
+}
+
+
+
